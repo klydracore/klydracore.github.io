@@ -256,7 +256,7 @@
                         // We use the branch name for tree ref
                         const tree = await ghFetch(`/repos/${owner}/${repo.name}/git/trees/${encodeURIComponent(b.name)}?recursive=1`);
                         branchContent.innerHTML = "";
-                        if (!tree.tree || tree.tree.length === 0) { branchContent.textContent = "Empty branch"; continue; }
+                        if (!tree.tree || tree.tree.length === 0) { branchContent.textContent = "Empty branch"; return; }
                         // Build a nested folder map
                         const root = {};
                         for (const item of tree.tree) {
