@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>🇰 Klydra Core - GitHub: Repositories</title>
+<style>
+  :root{
+    --bg:#0f1724; --card:#0b1220; --muted:#9aa6b2; --accent:#58a6ff;
+    --glass: rgba(255,255,255,0.02);
+  }
+  html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;}
+  body{background:linear-gradient(180deg,#071025 0%,#021018 100%);color:#e6eef6;padding:18px;}
+  .container{max-width:980px;margin:0 auto;background:var(--card);padding:18px;border-radius:12px;box-shadow:0 6px 30px rgba(2,6,23,0.6);}
+  header{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+  header h1{font-size:18px;margin:0}
+  .controls{margin-left:auto;display:flex;gap:8px;align-items:center}
+  input[type="text"]{background:var(--glass);border:1px solid rgba(255,255,255,0.04);color:var(--muted);padding:6px 8px;border-radius:6px;}
+  button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted);padding:6px 8px;border-radius:6px;cursor:pointer}
+  .repo-list{margin-top:12px}
+  .node{padding:6px 8px;border-radius:6px;margin:4px 0;display:flex;gap:8px;align-items:center}
+  .node:hover{background:rgba(255,255,255,0.01)}
+  .toggle{cursor:pointer;user-select:none}
+  .children{margin-left:22px;margin-top:6px;display:none}
+  .children.open{display:block}
+  .icon{width:20px;text-align:center;display:inline-block}
+  .label{flex:1}
+  .muted{color:var(--muted);font-size:13px}
+  .small{font-size:13px}
+  a.rawlink{color:inherit;text-decoration:none}
+  .loading{font-style:italic;color:var(--muted);font-size:13px}
+  .hint{margin-top:8px;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div style="font-size:26px">🇰</div>
+      <h1>Klydra Core - GitHub: Repositories</h1>
+      <div class="controls">
+        <label class="small muted">Token (optional):</label>
+        <input id="token" type="text" placeholder="ghp_.... (optional)" />
+        <button id="refresh">Refresh</button>
+      </div>
+    </header>
+
+    <div class="hint muted small">Click items to expand. Files go to raw URLs. Releases show assets.</div>
+    <div id="status" class="muted small" style="margin-top:8px"></div>
+
+    <div id="repoContainer" class="repo-list"></div>
+  </div>
+
+<script>
+(() => {
+  const owner = "klydracore";
+  const container = document.getElementById('repoContainer');
+  const status = document.getElementById('status');
+  const tokenInput = document.getElementById('token');
+  const refreshBtn = document.getElementById('refresh');
+
+  // icon mapping as requested
+  const ICONS = {
+    repo: "📦",
+    releases: "📤",
+    tag: "🏷️",
+    branch: "🪾",
+    folder: "📁",
+    file: "📃",
+    klydra: "🇰",
+    binary_pkg: "📦"
+  };
+
+  function apiHeaders() {
+    const headers = { "Accept": "application/vnd.github.v3+json" };
+    const token = tokenInput.value.trim();
+    if (token) headers["Authorization"] = "token " + token;
+    return headers;
+  }
+
+  function setStatus(text){
+    status.textContent = text || "";
+  }
+
+  async function ghFetch(path) {
+    const url = "https://api.github.com" + path;
+    const res = await fetch(url, { headers: apiHeaders() });
+    if (res.status === 403) {
+      const r = await res.json().catch(()=>({message:'rate limit or forbidden'}));
+      throw new Error("GitHub API error: " + (r.message || res.status));
+    }
+    if (!res.ok) {
+      const r = await res.json().catch(()=>({message:res.statusText}));
+      throw new Error("GitHub API error: " + (r.message || res.statusText));
+    }
+    return res.json();
+  }
+
+  function makeNode(icon, label, opts = {}) {
+    // opts: expandable, onClick, rightText, href
+    const node = document.createElement('div');
+    node.className = "node";
+    const toggle = document.createElement('span');
+    toggle.className = "toggle icon";
+    toggle.textContent = opts.expandable ? "►" : "";
+    const ic = document.createElement('span'); ic.className = "icon"; ic.textContent = icon;
+    const labelEl = document.createElement('div'); labelEl.className = "label";
+    if (opts.href) {
+      const a = document.createElement('a'); a.href = opts.href; a.className = "rawlink"; a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = label;
+      labelEl.appendChild(a);
+    } else {
+      labelEl.textContent = label;
+    }
+    node.appendChild(toggle);
+    node.appendChild(ic);
+    node.appendChild(labelEl);
+    if (opts.rightText) {
+      const rt = document.createElement('div'); rt.className = "muted"; rt.textContent = opts.rightText; node.appendChild(rt);
+    }
+    if (opts.onClick) {
+      node.style.cursor = "pointer";
+      node.addEventListener('click', (e) => { e.stopPropagation(); opts.onClick(node, toggle); });
+      // also allow toggle click
+      toggle.addEventListener('click', (e)=>{ e.stopPropagation(); opts.onClick(node, toggle); });
+    }
+    return node;
+  }
+
+  async function loadRepos() {
+    container.innerHTML = "";
+    setStatus("Loading repositories...");
+    try {
+      const repos = await ghFetch(`/users/${owner}/repos?per_page=100&sort=updated`);
+      if (!Array.isArray(repos)) throw new Error("Unexpected response");
+      if (repos.length === 0) {
+        container.textContent = "No repositories found.";
+        setStatus("");
+        return;
+      }
+      for (const repo of repos) {
+        const repoNode = document.createElement('div');
+        const head = makeNode(ICONS.repo, repo.name, {
+          expandable: true,
+          rightText: repo.private ? "private" : "",
+          onClick: async (node, toggle) => {
+            const children = node.nextElementSibling;
+            if (children && children.classList.contains('children')) {
+              children.classList.toggle('open');
+              toggle.textContent = children.classList.contains('open') ? "▼" : "►";
+              return;
+            }
+            toggle.textContent = "⌛";
+            const childContainer = document.createElement('div');
+            childContainer.className = "children open";
+            node.insertAdjacentElement('afterend', childContainer);
+            toggle.textContent = "▼";
+            // build repository subtree: Releases, Tags, Branches
+            // Releases
+            const relNode = makeNode(ICONS.releases, "Releases", { expandable: true });
+            childContainer.appendChild(relNode);
+            const relChildren = document.createElement('div'); relChildren.className = "children";
+            relNode.insertAdjacentElement('afterend', relChildren);
+            relNode.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              if (relChildren.classList.contains('open')) { relChildren.classList.remove('open'); relNode.querySelector('.toggle').textContent = "►"; return; }
+              relChildren.classList.add('open'); relNode.querySelector('.toggle').textContent = "▼";
+              relChildren.innerHTML = '<div class="loading">Loading releases…</div>';
+              try {
+                const releases = await ghFetch(`/repos/${owner}/${repo.name}/releases`);
+                relChildren.innerHTML = "";
+                if (releases.length === 0) { relChildren.textContent = "No releases"; return; }
+                for (const r of releases) {
+                  const rv = makeNode(ICONS.tag, r.tag_name || r.name || "untagged", {
+                    expandable: true,
+                    onClick: (n, t) => {
+                      const assets = n.nextElementSibling;
+                      if (assets && assets.classList.contains('children')) {
+                        assets.classList.toggle('open');
+                        t.textContent = assets.classList.contains('open') ? "▼" : "►";
+                        return;
+                      }
+                      t.textContent = "⌛";
+                      const assetDiv = document.createElement('div'); assetDiv.className = "children open";
+                      n.insertAdjacentElement('afterend', assetDiv);
+                      t.textContent = "▼";
+                      // assets list
+                      if ((r.assets || []).length === 0) {
+                        assetDiv.textContent = "No assets";
+                      } else {
+                        for (const a of r.assets) {
+                          const isChoco = a.name.endsWith('.choco.pkg');
+                          const icon = isChoco ? ICONS.binary_pkg : ICONS.file;
+                          const itm = makeNode(icon, a.name, { href: a.browser_download_url });
+                          assetDiv.appendChild(itm);
+                        }
+                      }
+                    }
+                  });
+                  relChildren.appendChild(rv);
+                }
+              } catch(e){ relChildren.innerHTML = '<div class="muted">Failed to load releases</div>'; console.error(e); }
+            });
+
+            // Tags
+            const tagsNode = makeNode(ICONS.tag, "Tags", { expandable: true });
+            childContainer.appendChild(tagsNode);
+            const tagsChildren = document.createElement('div'); tagsChildren.className = "children";
+            tagsNode.insertAdjacentElement('afterend', tagsChildren);
+            tagsNode.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              if (tagsChildren.classList.contains('open')) { tagsChildren.classList.remove('open'); tagsNode.querySelector('.toggle').textContent = "►"; return; }
+              tagsChildren.classList.add('open'); tagsNode.querySelector('.toggle').textContent = "▼";
+              tagsChildren.innerHTML = '<div class="loading">Loading tags…</div>';
+              try {
+                const tags = await ghFetch(`/repos/${owner}/${repo.name}/tags`);
+                tagsChildren.innerHTML = "";
+                if (tags.length === 0) { tagsChildren.textContent = "No tags"; return; }
+                for (const tEntry of tags) {
+                  const tnode = makeNode(ICONS.tag, tEntry.name, { rightText: tEntry.commit ? tEntry.commit.sha.slice(0,7) : "" });
+                  tagsChildren.appendChild(tnode);
+                }
+              } catch(e){ tagsChildren.innerHTML = '<div class="muted">Failed to load tags</div>'; console.error(e); }
+            });
+
+            // Branches
+            const branchesNode = makeNode(ICONS.branch, "Branches", { expandable: true });
+            childContainer.appendChild(branchesNode);
+            const branchesChildren = document.createElement('div'); branchesChildren.className = "children";
+            branchesNode.insertAdjacentElement('afterend', branchesChildren);
+
+            branchesNode.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              if (branchesChildren.classList.contains('open')) { branchesChildren.classList.remove('open'); branchesNode.querySelector('.toggle').textContent = "►"; return; }
+              branchesChildren.classList.add('open'); branchesNode.querySelector('.toggle').textContent = "▼";
+              branchesChildren.innerHTML = '<div class="loading">Loading branches…</div>';
+              try {
+                const branches = await ghFetch(`/repos/${owner}/${repo.name}/branches`);
+                branchesChildren.innerHTML = "";
+                if (branches.length === 0) { branchesChildren.textContent = "No branches"; return; }
+                for (const b of branches) {
+                  const bnode = makeNode(ICONS.branch, b.name, {
+                    expandable: true,
+                    onClick: async (n, t) => {
+                      const existing = n.nextElementSibling;
+                      if (existing && existing.classList.contains('children')) {
+                        existing.classList.toggle('open'); t.textContent = existing.classList.contains('open') ? "▼" : "►"; return;
+                      }
+                      t.textContent = "⌛";
+                      const branchContent = document.createElement('div'); branchContent.className = "children open";
+                      n.insertAdjacentElement('afterend', branchContent);
+                      t.textContent = "▼";
+                      branchContent.innerHTML = '<div class="loading">Loading repository tree (may take a moment)…</div>';
+                      // Use git/trees to get full tree for branch (fast, single request)
+                      try {
+                        // We use the branch name for tree ref
+                        const tree = await ghFetch(`/repos/${owner}/${repo.name}/git/trees/${encodeURIComponent(b.name)}?recursive=1`);
+                        branchContent.innerHTML = "";
+                        if (!tree.tree || tree.tree.length === 0) { branchContent.textContent = "Empty branch"; continue; }
+                        // Build a nested folder map
+                        const root = {};
+                        for (const item of tree.tree) {
+                          const parts = item.path.split('/');
+                          let nodeptr = root;
+                          for (let i=0;i<parts.length;i++){
+                            const p = parts[i];
+                            if (i === parts.length-1){
+                              // leaf
+                              if (item.type === 'tree') nodeptr[p] = nodeptr[p] || {__type:'folder', children:{}};
+                              else nodeptr[p] = {__type:'file', path:item.path};
+                            } else {
+                              nodeptr[p] = nodeptr[p] || {__type:'folder', children:{}};
+                              nodeptr = nodeptr[p].children;
+                            }
+                          }
+                        }
+                        // recursively render
+                        function renderFolder(map, parentDiv, curPath = "") {
+                          const names = Object.keys(map).sort((a,b)=>{
+                            const ta = map[a].__type === 'folder' ? 0 : 1;
+                            const tb = map[b].__type === 'folder' ? 0 : 1;
+                            if (ta !== tb) return ta - tb;
+                            return a.localeCompare(b);
+                          });
+                          for (const name of names) {
+                            const info = map[name];
+                            if (info.__type === 'folder') {
+                              const fn = makeNode(ICONS.folder, name, { expandable: true, onClick: (n, t) => {
+                                const next = n.nextElementSibling;
+                                if (next && next.classList.contains('children')) {
+                                  next.classList.toggle('open'); t.textContent = next.classList.contains('open') ? "▼" : "►"; return;
+                                }
+                                t.textContent = "⌛";
+                                const c = document.createElement('div'); c.className = 'children open';
+                                n.insertAdjacentElement('afterend', c);
+                                t.textContent = "▼";
+                                renderFolder(info.children, c, curPath + name + '/');
+                              }});
+                              parentDiv.appendChild(fn);
+                            } else {
+                              const path = info.path;
+                              const raw = `https://raw.githubusercontent.com/${owner}/${repo.name}/${b.name}/${path}`;
+                              const isChoco = name.endsWith('.choco.pkg');
+                              const icon = isChoco ? ICONS.binary_pkg : ICONS.file;
+                              const fileNode = makeNode(icon, name, { href: raw });
+                              parentDiv.appendChild(fileNode);
+                            }
+                          }
+                        }
+                        renderFolder(root, branchContent, "");
+                        // Optionally, show top-level files (files directly at repo root that may not appear as children of top-level folder)
+                      } catch(e) {
+                        branchContent.innerHTML = '<div class="muted">Failed to load tree</div>';
+                        console.error(e);
+                      }
+                    }
+                  });
+                  branchesChildren.appendChild(bnode);
+                }
+              } catch(e){ branchesChildren.innerHTML = '<div class="muted">Failed to load branches</div>'; console.error(e); }
+            });
+
+          } // end repo click
+        });
+        container.appendChild(head);
+      }
+      setStatus(`Loaded ${repos.length} repositories for ${owner}.`);
+    } catch (err) {
+      container.innerHTML = '<div class="muted">Failed to load repositories. See console for details.</div>';
+      setStatus(err.message);
+      console.error(err);
+    }
+  }
+
+  refreshBtn.addEventListener('click', () => { loadRepos(); });
+
+  // initial load
+  loadRepos();
+
+})();
+</script>
+</body>
+</html>
